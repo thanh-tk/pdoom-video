@@ -3,16 +3,22 @@
 //   stills:  bun scripts/render.ts stills --t 1.5,23,40.2 [--only id1,id2] [--out dir]
 //   sheet:   bun scripts/render.ts sheet --from 20 --to 35 [--n 12] [--cols 4] [--only ids] [--out file.png]   (or --times a,b,c | --cuts)
 //   plates:  bun scripts/render.ts plates   (renders one representative JPEG per plate into public/plates/ (used by the outro's rewind), times from plates.json or entry midpoints)
+//   sweep:   bun scripts/render.ts sweep [--from 0] [--to <duration>] [--out ../out/wip/sweep] [--sheets] [--only ids]
+//            every lyric line's midpoint + last frame before the next cut, plus every entry's last
+//            frame (kind scene-end); writes stills + index.tsv (+ sheet_NN.png contact sheets)
 //   perf:    bun scripts/render.ts perf --from 20 --to 25 [--only ids] [--samples 1] [--shutter 0.5]   (avg ms per frame incl. GPU sync and the export's pixel readback)
-//   video:   bun scripts/render.ts video [--from 0] [--to 156.65] [--fps 60] [--crf 16] [--x264 aq-mode=3] [--samples 1] [--shutter 0.5] [--out ../out/pdoom.mp4] [--noaudio]
+//   video:   bun scripts/render.ts video [--from 0] [--to <song duration>] [--fps 60] [--crf 16] [--x264 aq-mode=3] [--samples 1] [--shutter 0.5] [--out ../out/<PROJECT.output>] [--noaudio]
 //            [--workers 2] [--chunk 8] [--mem-gb 1] [--spool-gb 20]
 //            --samples N averages N sub-frames per frame over shutter×(1/fps): motion blur + temporal AA;
 //            --samples auto picks the count per 32x32 tile (12, 36, 108 or 324, see Engine.render; --refine frame: per frame)
 //            --workers N headless Chromes render chunks of --chunk frames into one ffmpeg, in order (see video())
 //   --scale N (all modes): render at N× the 1920x1080 layout (--scale 2 = true 3840x2160); stills are then saved
 //            full-res from the pixel buffer, videos are encoded at the physical size.
+//   --angle <backend> (all modes): ANGLE backend for Chrome's WebGL (default metal on macOS, d3d11 on Windows)
+//   --cut <internal|public> (all modes): public hides internal-only content (partner logos, real code, PR numbers)
 // Uses the Vite dev server at --url (default http://localhost:5173); starts a private one if unreachable.
 import { chromium, type Page } from 'playwright-core';
+import { PROJECT } from '../src/project';
 import { mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,6 +30,7 @@ const flag = (k: string) => argv.includes(`--${k}`);
 const APP = path.resolve(import.meta.dir, '..');
 const SCALE = Math.max(1, Math.round(+opt('scale', '1')!));
 const OW = 1920 * SCALE, OH = 1080 * SCALE; // output size
+const ANGLE = opt('angle') ?? ({ darwin: 'metal', win32: 'd3d11' } as Record<string, string>)[process.platform];
 // --samples N (fixed) or --samples auto [--min-samples 4] [--max-samples 324] [--tol 3] [--refine tiles|frame]
 // (adaptive, see Engine.render)
 const SAMPLES = opt('samples', '1') === 'auto'
@@ -51,14 +58,15 @@ async function openPage(url: string) {
   const browser = await chromium.launch({
     channel: 'chrome',
     headless: !flag('headed'),
-    args: ['--use-angle=metal', '--enable-gpu-rasterization', '--ignore-gpu-blocklist', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'],
+    args: [...(ANGLE ? [`--use-angle=${ANGLE}`] : []), '--enable-gpu-rasterization', '--ignore-gpu-blocklist', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'],
   });
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   const logs: string[] = [];
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') logs.push(`[${m.type()}] ${m.text()}`); });
   page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
   const only = opt('only');
-  await page.goto(`${url}/?export=1${only ? `&only=${only}` : ''}${SCALE !== 1 ? `&scale=${SCALE}` : ''}`);
+const CUT = opt('cut');
+  await page.goto(`${url}/?export=1${only ? `&only=${only}` : ''}${SCALE !== 1 ? `&scale=${SCALE}` : ''}${CUT ? `&cut=${CUT}` : ''}`);
   await page.waitForFunction(() => (window as any).__pdoom?.ready || (window as any).__pdoom?.error, null, { timeout: 120000 });
   const err = await page.evaluate(() => (window as any).__pdoom.error);
   if (err) throw new Error(`app failed to boot:\n${err}\n${logs.join('\n')}`);
@@ -70,7 +78,7 @@ async function openPage(url: string) {
 }
 
 async function stills(page: Page, times: number[], outDir: string) {
-  mkdirSync(outDir, { recursive: true });
+  if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
   const files: string[] = [];
   for (const t of times) {
     const k: number = await page.evaluate(([t, s, sh]) => (window as any).__pdoom.still(t, s, sh), [t, SAMPLES, +opt('shutter', '0.5')!] as const);
@@ -102,7 +110,7 @@ async function sheet(page: Page, times: number[], cols: number, out: string) {
     });
     return cv.toDataURL('image/png');
   }, { times, cols });
-  mkdirSync(path.dirname(out), { recursive: true });
+  if (!existsSync(path.dirname(out))) mkdirSync(path.dirname(out), { recursive: true });
   await Bun.write(out, Buffer.from(dataUrl.split(',')[1]!, 'base64'));
 }
 
@@ -115,9 +123,9 @@ async function sheet(page: Page, times: number[], cols: number, out: string) {
  * light ones (2D drawing, readback, transfer).
  */
 async function video(url: string, from: number, to: number, fps: number, out: string) {
-  mkdirSync(path.dirname(out), { recursive: true });
+  if (!existsSync(path.dirname(out))) mkdirSync(path.dirname(out), { recursive: true });
   const crf = opt('crf', '16')!;
-  const audio = path.join(ROOT, 'audio/pdoom.mp3');
+  const audio = path.join(ROOT, PROJECT.audio);
   // (frames come as rgb24: the same YUV out of the scaler as from rgba, a quarter fewer bytes to move)
   const args = ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${OW}x${OH}`, '-r', String(fps), '-i', 'pipe:0'];
   if (!flag('noaudio')) args.push('-ss', String(from), '-t', String(to - from), '-i', audio);
@@ -139,7 +147,7 @@ async function video(url: string, from: number, to: number, fps: number, out: st
   const cap = Math.max(4, Math.floor((+opt('mem-gb', '1')! * 1e9) / frameBytes));
   const spoolCap = Math.floor((+opt('spool-gb', '20')! * 1e9) / frameBytes);
   const spoolDir = path.join(tmpdir(), `pdoom-spool-${process.pid}`);
-  mkdirSync(spoolDir, { recursive: true });
+  if (!existsSync(spoolDir)) mkdirSync(spoolDir, { recursive: true });
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { ff.kill(9); rmSync(spoolDir, { recursive: true, force: true }); process.exit(130); });
   const spooled = new Set<number>();
   let spoolPeak = 0;
@@ -281,7 +289,7 @@ if (mode === 'video') {
     const { browser, page } = await openPage(url);
     const dur: number = await page.evaluate(() => (window as any).__pdoom.duration);
     await browser.close();
-    await video(url, +opt('from', '0')!, +opt('to', String(dur))!, +opt('fps', '60')!, path.resolve(opt('out', path.join(ROOT, 'out/pdoom.mp4'))!));
+    await video(url, +opt('from', '0')!, +opt('to', String(dur))!, +opt('fps', '60')!, path.resolve(opt('out', path.join(ROOT, 'out', PROJECT.output))!));
   } finally { stop(); }
   process.exit(0);
 }
@@ -311,20 +319,61 @@ try {
     console.log(out);
   } else if (mode === 'plates') {
     const tl: { id: string; start: number; end: number }[] = await page.evaluate(() => (window as any).__pdoom.timeline);
-    const figs = ['open', 'loss', 'room', 'shoggoth', 'spacetime', 'ascent', 'bureau', 'leftturn', 'paperclips', 'fuse', 'stack', 'dense', 'loom', 'ilya'];
-    const overrides: Record<string, number> = existsSync(path.join(APP, 'plates.json')) ? await Bun.file(path.join(APP, 'plates.json')).json() : {};
+    const pj = path.join(APP, 'plates.json');
+    const figs: [string, number][] = existsSync(pj)
+      ? Object.entries(await Bun.file(pj).json() as Record<string, number>)
+      : tl.map((e) => [e.id, (e.start + e.end) / 2]);
     const dir = path.join(APP, 'public/plates');
-    mkdirSync(dir, { recursive: true });
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     await page.evaluate(() => { (window as any).__pdoom.engine.hudOff = true; });
     for (let i = 0; i < figs.length; i++) {
-      const e = tl.find((x) => x.id === figs[i]);
-      if (!e) continue;
-      const t = overrides[figs[i]!] ?? (e.start + e.end) / 2;
+      const t = figs[i]![1];
       await page.evaluate((t) => (window as any).__pdoom.still(t, 4, 0.2), t);
       const f = path.join(dir, `fig${String(i + 1).padStart(2, '0')}.jpg`);
       await page.screenshot({ path: f, type: 'jpeg', quality: 90, clip: { x: 0, y: 0, width: 1920, height: 1080 } });
       console.log(f, t.toFixed(2));
     }
+  } else if (mode === 'sweep') {
+    // every lyric line's midpoint + last frame before the next cut, plus each entry's last frame
+    const rows: { t: number; kind: string; label: string }[] = await page.evaluate(() => {
+      const P = (window as any).__pdoom;
+      const ly = P.engine.lyrics, au = P.engine.audio, out: { t: number; kind: string; label: string }[] = [];
+      // mirror of engine/lyrics.ts lineCut: last beat at/before next's first word, but not
+      // before prev's last word has started + 0.12 s, never later than s - 0.02
+      const cut = (l: any, prev: any) => {
+        const s0 = l.words[0].start;
+        const c0 = au.timeOfBeat(Math.floor(au.beatAt(s0 + 0.02)));
+        const p0 = prev?.words[prev.words.length - 1]?.start;
+        return p0 === undefined ? c0 : Math.max(c0, Math.min(p0 + 0.12, s0 - 0.02));
+      };
+      ly.lines.forEach((l: any, i: number) => {
+        if (!l.words?.length) return;
+        const mid = (l.words[0].start + l.words[l.words.length - 1].end) / 2;
+        out.push({ t: mid, kind: 'mid', label: `L${i} ${l.text}` });
+        const end = i + 1 < ly.lines.length && ly.lines[i + 1].words?.length ? cut(ly.lines[i + 1], l) - 1 / 60 : au.duration - 1 / 60;
+        if (end > mid) out.push({ t: end, kind: 'end', label: `L${i} ${l.text}` });
+      });
+      for (const e of P.timeline) out.push({ t: e.end - 1 / 60, kind: 'scene-end', label: e.id });
+      return out;
+    });
+    const lo = +opt('from', '0')!, hi = opt('to') ? +opt('to')! : Infinity;
+    const sel = rows.filter(r => r.t >= lo && r.t <= hi).sort((a, b) => a.t - b.t);
+    const merged: typeof sel = [];
+    for (const r of sel) {
+      const last = merged[merged.length - 1];
+      if (last && r.t - last.t < 0.01) last.label += ' | ' + r.label, last.kind += ',' + r.kind;
+      else merged.push({ ...r });
+    }
+    const outDir = opt('out', path.join(ROOT, 'out/wip/sweep'))!;
+    const files = await stills(page, merged.map(r => r.t), outDir);
+    const tsv = merged.map((r, i) => `${r.t.toFixed(3)}\t${path.basename(files[i]!)}\t${r.kind}\t${r.label.replace(/\t/g, ' ')}`).join('\n');
+    const idx = path.join(outDir, 'index.tsv');
+    writeFileSync(idx, tsv + '\n', 'utf-8');
+    console.log(files.join('\n')); console.log(idx);
+    if (flag('sheets'))
+      for (let s = 0; s * 24 < merged.length; s++)
+        await sheet(page, merged.slice(s * 24, s * 24 + 24).map(r => r.t), 4,
+          path.join(outDir, `sheet_${String(s).padStart(2, '0')}.png`));
   } else if (mode === 'perf') {
     const from = +opt('from', '0')!, to = +opt('to', '5')!;
     const r = await page.evaluate(async ({ from, to, samples, shutter }) => {

@@ -6,8 +6,8 @@
   * 100 fps normalized envelopes (mix rms / low / mid / high, stem rms),
   * kick / snare / hat onsets from the drums stem, vocal note onsets.
 
-All times are in the gapless-mp3 timeline (Demucs stems are shifted by
-common.STEM_OFFSET_SEC, see common.py).
+All times are in the gapless-mp3 timeline (Demucs stems are shifted by the
+offsets in work/<song>/stem_offset.json, see common.py).
 
 Run:  uv run python analyze.py [--plots]
 """
@@ -24,28 +24,9 @@ from scipy.signal import butter, find_peaks, sosfiltfilt
 SR = 44100
 FPS = 100
 
-# Section map in bars (bar k starts at downbeat k; bar 0 = first downbeat).
-# Rule: a section starts on the downbeat of the bar in which its first lyric
-# line starts, unless that line starts with a short (< 2 beat) pickup, in which
-# case the pickup stays in the previous section.  The choruses all start with
-# a ~3-beat pickup "I'm upping my P-" over a bass stop, landing "DOOM" on the
-# next downbeat, so the chorus section starts at the pickup bar.
-SECTION_BARS = [
-    ("intro", None, 1),      # 0 .. bar 1 (1-bar synth intro, pickup "I" at 1.41)
-    ("verse1", 1, 9),        # Eb Bb Cm Ab x1 (2 bars each), no drums until bar 7
-    ("pre1", 9, 12),         # F F Ab  "ChatGPT, please don't eat me alive"
-    ("chorus1", 12, 20),     # pickup/stop bar 12, "DOOM" on bar 13
-    ("break1", 20, 21),      # 1-bar turnaround (tail of held "eyes")
-    ("verse2", 21, 29),
-    ("pre2", 29, 32),        # "Sydney, please let me free" (bass out)
-    ("chorus2", 32, 41),     # incl. bar 40 (held "reckoned", pickup "Forward")
-    ("verse3", 41, 49),
-    ("pre3", 49, 52),        # breakdown: drums + bass out, "Gato, please don't let me go"
-    ("chorus3", 52, 60),     # quiet chorus: light drums, no bass
-    ("bridge", 60, 68),      # "Just transformers ..." (full band from bar 61)
-    ("chorus4", 68, 77),     # final chorus, bar 76 = stop bar ("all for show?")
-    ("outro", 77, None),     # full band + "oh" vocals to bar 84 (152.98), then decay
-]
+# Section map in bars (bar k starts at downbeat k; bar 0 = first downbeat),
+# from songs/<SONG>.py. Empty -> a single "song" section.
+SECTION_BARS = common.song.SECTION_BARS
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +86,7 @@ def fit_grid(drums, mix, sr, duration):
         return np.maximum.reduce([o[idx - 1], o[idx], o[idx + 1]]).mean()
 
     best = (0, None, None)
-    for bpm in np.arange(125.0, 138.0, 0.02):
+    for bpm in np.arange(common.song.BPM_RANGE[0], common.song.BPM_RANGE[1], 0.02):
         P = 60 / bpm
         for off in np.arange(0, P, 0.004):
             s = score(P, off)
@@ -129,6 +110,62 @@ def fit_grid(drums, mix, sr, duration):
     # first beat >= 0
     off = off - P * math.floor(off / P)
     return bpm, P, off, res
+
+
+def track_grid(drums, sr, duration, smooth_ms=6.0):
+    """Beat grid that follows a drifting tempo (songs/<SONG>.py GRID = "tracked").
+
+    Kick attacks (four-on-the-floor) drive a phase-locked loop from an anchor: the kick at
+    the centre of the 15 s window with the most beat-spaced kick intervals inside BPM_RANGE.
+    The loop walks forward and backward one beat at a time, pulled towards the kick within
+    +-12% of a period of each prediction (coasting where there is none). A cubic smoothing
+    spline through the matched kicks (residual ~smooth_ms) then gives the beat times; outside
+    the matched span the grid continues at the boundary period. Returns (beats, residuals).
+    """
+    from scipy.interpolate import UnivariateSpline
+    K, _ = band_onsets(drums, sr, None, 120, win=0.012, min_gap=0.15, rel_db=12)
+    lo_p, hi_p = 60 / common.song.BPM_RANGE[1], 60 / common.song.BPM_RANGE[0]
+    ioi, mid = np.diff(K), K[:-1]
+    ok = (ioi > lo_p) & (ioi < hi_p)
+    starts = np.arange(0, max(duration - 15, 1), 2.5)
+    a0 = max(starts, key=lambda s: int((ok & (mid >= s) & (mid < s + 15)).sum()))
+    sel = ok & (mid >= a0) & (mid < a0 + 15)
+    P0 = float(np.median(ioi[sel]))
+    anchor = float(K[np.argmin(np.abs(K - (a0 + 7.5)))])
+
+    def walk(direction, alpha=0.7, beta=0.15, tol=0.12):
+        t, P, out = anchor, P0, []
+        while True:
+            pred = t + direction * P
+            if pred < -P or pred > duration + P:
+                return out
+            near = np.where(np.abs(K - pred) < tol * P)[0]
+            if len(near):
+                k = K[near[np.argmin(np.abs(K[near] - pred))]]
+                e = k - pred
+                t = pred + alpha * e
+                P = float(np.clip(P + direction * beta * e, lo_p, hi_p))
+                out.append(float(k))
+            else:
+                t = pred
+                out.append(None)
+
+    bw, fw = walk(-1), walk(+1)
+    seq = bw[::-1] + [anchor] + fw
+    n = np.arange(len(seq)) - len(bw)
+    hit = np.array([x is not None for x in seq])
+    kn, kv = n[hit], np.array([x for x in seq if x is not None])
+    sp = UnivariateSpline(kn, kv, k=3, s=len(kn) * (smooth_ms / 1000) ** 2)
+    n_lo, n_hi = int(kn.min()), int(kn.max())
+    p_lo, p_hi = float(sp(n_lo + 1) - sp(n_lo)), float(sp(n_hi) - sp(n_hi - 1))
+    t = np.where(n < n_lo, sp(n_lo) + (n - n_lo) * p_lo, np.where(n > n_hi, sp(n_hi) + (n - n_hi) * p_hi, sp(n)))
+    # extend to cover the whole song, then keep 0 <= t <= duration
+    while t[0] > 0:
+        t = np.r_[t[0] - p_lo, t]
+    while t[-1] < duration:
+        t = np.r_[t, t[-1] + p_hi]
+    beats = t[(t >= 0) & (t <= duration)]
+    return beats, kv - sp(kn)
 
 
 def band_onsets(x, sr, lo, hi, win=0.010, hop_s=0.002, min_gap=0.08, rel_db=10.0,
@@ -245,13 +282,26 @@ def main(plots=False):
         if len(stems[n]) < len(mix):
             stems[n] = np.pad(stems[n], (0, len(mix) - len(stems[n])))
 
-    bpm, P, off, kick_res = fit_grid(stems["drums"], mix, SR, duration)
-    print(f"tempo {bpm:.3f} BPM  period {P:.5f}s  first beat {off:.4f}s  kick residual sd {kick_res.std()*1000:.1f} ms")
-    beats = off + P * np.arange(int((duration - off) / P) + 1)
-    # bar phase: beat index 0 is a downbeat (see NOTES / qa/drums_pattern.png)
+    if getattr(common.song, "GRID", "constant") == "tracked":
+        beats, kick_res = track_grid(stems["drums"], SR, duration)
+        per = np.diff(beats)
+        P, off = float(np.median(per)), float(beats[0])
+        bpm = 60 / P
+        print(f"tracked grid: {len(beats)} beats, tempo {60 / per.max():.2f}-{60 / per.min():.2f} BPM (median {bpm:.3f}), "
+              f"first beat {off:.4f}s, {len(kick_res)} kicks matched, kick residual sd {kick_res.std()*1000:.1f} ms")
+    else:
+        bpm, P, off, kick_res = fit_grid(stems["drums"], mix, SR, duration)
+        print(f"tempo {bpm:.3f} BPM  period {P:.5f}s  first beat {off:.4f}s  kick residual sd {kick_res.std()*1000:.1f} ms")
+        beats = off + P * np.arange(int((duration - off) / P) + 1)
+    # bar phase: beat indices ≡ DOWNBEAT_PHASE (mod 4) are downbeats
     beat_in_bar = np.arange(len(beats)) % 4
-    downbeats = beats[beat_in_bar == 0]
-    bar_t = lambda k: float(off + 4 * P * k)
+    downbeats = beats[beat_in_bar == common.song.DOWNBEAT_PHASE]
+
+    def bar_t(k):
+        """Start of bar k (downbeat k), continued at 4 periods per bar outside the grid."""
+        if 0 <= k < len(downbeats):
+            return float(downbeats[k])
+        return float(downbeats[0] + 4 * P * k) if k < 0 else float(downbeats[-1] + 4 * P * (k - len(downbeats) + 1))
 
     # envelopes -------------------------------------------------------------
     n = int(math.ceil(duration * FPS))
@@ -276,7 +326,8 @@ def main(plots=False):
     }
     # snare / kick position statistics -> bar phase evidence
     def pos_hist(ts):
-        ph = np.round((np.asarray(ts) - off) / (P / 2)).astype(int) % 8
+        x = np.interp(np.asarray(ts), beats, np.arange(len(beats)), left=np.nan, right=np.nan)
+        ph = np.round(2 * x[~np.isnan(x)]).astype(int) % 8
         return np.bincount(ph, minlength=8).tolist()
     print("kick   8th-positions in bar:", pos_hist(kt))
     print("snare  8th-positions in bar:", pos_hist(st))
@@ -284,12 +335,15 @@ def main(plots=False):
 
     # sections -------------------------------------------------------------------
     sections = []
-    for name, a, b in SECTION_BARS:
-        s = 0.0 if a is None else bar_t(a)
-        e = duration if b is None else bar_t(b)
-        sections.append(dict(name=name, start=round(s, 3), end=round(e, 3), bars=[a if a is not None else -1, b]))
-    for s in sections:
-        s.pop("bars")
+    if SECTION_BARS:
+        for name, a, b in SECTION_BARS:
+            s = 0.0 if a is None else bar_t(a)
+            e = duration if b is None else bar_t(b)
+            sections.append(dict(name=name, start=round(s, 3), end=round(e, 3), bars=[a if a is not None else -1, b]))
+        for s in sections:
+            s.pop("bars")
+    else:
+        sections.append(dict(name="song", start=0.0, end=round(duration, 3)))
 
     doc = dict(
         duration=round(duration, 3),
@@ -302,9 +356,8 @@ def main(plots=False):
         fps=FPS,
         **env,
         onsets=onsets,
-        notes=NOTES.format(bpm=bpm, off=off, P=P, first_db=float(downbeats[0]),
-                           b61=bar_t(61), b76=bar_t(76), b77=bar_t(77), b84=bar_t(84),
-                           sn=len(st), kk=len(kt), hh=len(ht)),
+        notes=common.song.audio_notes(dict(bpm=bpm, off=off, P=P, first_db=float(downbeats[0]),
+                                           bar_t=bar_t, sn=len(st), kk=len(kt), hh=len(ht))),
     )
     (common.DATA / "audio.json").write_text(json.dumps(doc, separators=(",", ":")))
     print("wrote", common.DATA / "audio.json", f"{len(beats)} beats, {len(downbeats)} downbeats, "
@@ -314,42 +367,13 @@ def main(plots=False):
     return doc
 
 
-NOTES = (
-    "Timeline = gapless mp3 decode (ffmpeg/libsndfile/browsers); Demucs stems were "
-    "shifted -23.0 ms (LAME encoder delay) to match. "
-    "Tempo is constant: {bpm:.3f} BPM (period {P:.5f} s), fitted over the whole song on "
-    "drum+mix onset envelopes (no drift: per-15 s phase deviation <= 2 ms), phase refined "
-    "on kick attack times; first beat {off:.3f} s. The grid is extrapolated through the "
-    "drum-less intro/verse1/pre3 and the fade. "
-    "Bar phase: the drums play four-on-the-floor kick with snare on beats 2 and 4 "
-    "(broadband snare bursts on odd beat indices) and 8th-note off-beat hats, which fixes "
-    "the phase up to half a bar; the half-bar ambiguity is resolved by the harmony: the "
-    "progression Eb-Bb-Cm-Ab (2 bars per chord, F-F-Ab in the pre-choruses) changes chord "
-    "exactly on beat indices = 0 mod 8, and every chorus lands 'DOOM' of 'P(doom)' on a "
-    "downbeat (bars 13/33/53/69). First downbeat {first_db:.3f} s; bar k starts "
-    "at first_downbeat + k*4*period. "
-    "Sections start on downbeats; choruses include their 3-beat pickup bar "
-    "('I'm upping my P-' over a bass stop). pre3 (89.3-94.8) is a breakdown with no drums "
-    "or bass; chorus3 (94.8-109.3) is a quiet chorus with light drums and no bass; the "
-    "full band returns in bar 61 ({b61:.2f} s). chorus4 ends with a stop bar ({b76:.2f}-{b77:.2f} s, "
-    "'all for show?'), outro is loud until {b84:.2f} s (drums stop) then decays to silence ~155.5 s. "
-    "Envelopes: 100 fps, frame i centred at i/100 s, 46 ms RMS window, one-pole smoothing "
-    "(10 ms attack / 90 ms release), each divided by its own 99th percentile and clipped "
-    "to 0..1 (linear amplitude). low <150 Hz, mid 150-2000 Hz, high >4 kHz of the full mix; "
-    "vocal/drums/bass/other = stem RMS. "
-    "Onsets [time, strength 0-1] from the drums stem: kick = attack (steepest rise) of the "
-    "<120 Hz band ({kk}); snare = 1.5-5 kHz attacks whose 0.5-5 kHz noise tail 40-120 ms later is in the "
-    "loudest local class ({sn}; kick-only in pre1/pre2); hat = >7 kHz attacks not within 40 ms of a snare or 30 ms of a kick ({hh}; mostly 8th off-beats). vocal = note "
-    "onsets from the vocal stem (log-mel flux peaks + legato pitch jumps > 0.8 semitone), "
-    "including backing vocals / ad-libs."
-)
-
-
 def make_plots(doc, stems):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    wins = [(0, 12), (14, 26), (28, 36), (56, 64), (86, 98), (106, 114), (136, 146), (148, 156.6)]
+    wins = common.song.QA_WINDOWS
+    if wins is None:
+        wins = [(t, min(t + 12, doc["duration"])) for t in np.arange(0, doc["duration"], 12)]
     t = np.arange(len(doc["rms"])) / FPS
     for (t0, t1) in wins:
         fig, ax = plt.subplots(3, 1, figsize=(22, 11), sharex=True,
@@ -404,7 +428,7 @@ def make_plots(doc, stems):
         ax[0].text(s["start"] + 0.2, 1.03, s["name"], fontsize=10, color="tab:red")
     for a_ in ax:
         a_.legend(loc="upper right", fontsize=8)
-    ax[1].set_xticks(np.arange(0, 157, 5))
+    ax[1].set_xticks(np.arange(0, doc["duration"], 5))
     fig.tight_layout()
     fig.savefig(common.QA / "audio_overview.png", dpi=65)
     plt.close(fig)

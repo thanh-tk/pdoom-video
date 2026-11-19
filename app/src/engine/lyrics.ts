@@ -1,5 +1,6 @@
 // Word-timed lyrics (data/lyrics.json) with queries for karaoke rendering.
 import { smart } from './type';
+import type { AudioData } from './audio';
 
 export interface Word {
   w: string; // display token (punctuation attached, typographic quotes: don’t, ’cause)
@@ -115,6 +116,16 @@ export class Lyrics {
     }
     return Math.min(chars, l.text.length);
   }
+}
+
+/** Cut before lyric line `next`: the last beat at/before its first word, but not before `prev`'s
+ *  last word has started + 0.12 s (so that word is shown and wiped while it is sung; then the cut
+ *  is off the beat), and never later than 0.02 s before `next`'s first word. */
+export function lineCut(audio: AudioData, next: Line, prev?: Line | null): number {
+  const s = next.words[0]!.start;
+  const c = audio.timeOfBeat(Math.floor(audio.beatAt(s + 0.02)));
+  const p = prev?.words[prev.words.length - 1]?.start;
+  return p === undefined ? c : Math.max(c, Math.min(p + 0.12, s - 0.02));
 }
 
 export const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9()]/g, '');

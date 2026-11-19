@@ -24,6 +24,24 @@ const vec3 C_SIGNAL = ${v3(LIN.signal)};
 const vec3 C_EMBER = ${v3(LIN.ember)};
 const vec3 C_BLOOD = ${v3(LIN.blood)};
 const vec3 C_ACID = ${v3(LIN.acid)};
+const vec3 C_PAPER = ${v3(LIN.paper)};
+const vec3 C_MIST = ${v3(LIN.mist)};
+const vec3 C_LINE = ${v3(LIN.line)};
+const vec3 C_SLATE = ${v3(LIN.slate)};
+const vec3 C_TEXT = ${v3(LIN.text)};
+const vec3 C_TEAL = ${v3(LIN.teal)};
+const vec3 C_TEALWASH = ${v3(LIN.tealWash)};
+const vec3 C_GREEN = ${v3(LIN.green)};
+const vec3 C_GREENWASH = ${v3(LIN.greenWash)};
+const vec3 C_CRIMSONWASH = ${v3(LIN.crimsonWash)};
+const vec3 C_AMBERWASH = ${v3(LIN.amberWash)};
+const vec3 C_CRIMSON = ${v3(LIN.crimson)};
+const vec3 C_MAUVE = ${v3(LIN.mauve)};
+const vec3 C_BLUSH = ${v3(LIN.blush)};
+const vec3 C_SEA = ${v3(LIN.sea)};
+const vec3 C_DEEPSEA = ${v3(LIN.deepSea)};
+const vec3 C_AMBER = ${v3(LIN.amber)};
+const vec3 C_NIGHT = ${v3(LIN.night)};
 
 /** Rotated-grid supersample offset k (0..3) within one pixel, in pixels. See SS_TAP (gl.ts). */
 vec2 rgss(int k) { return k == 0 ? vec2(0.125, -0.375) : k == 1 ? vec2(0.375, 0.125) : k == 2 ? vec2(-0.125, 0.375) : vec2(-0.375, -0.125); }

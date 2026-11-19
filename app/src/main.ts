@@ -2,6 +2,7 @@
 import { Engine, type AdaptiveSampling } from './engine/engine';
 import { PW, PH, SCALE } from './engine/gl';
 import { makeTimeline } from './timeline';
+import { PROJECT } from './project';
 
 const params = new URLSearchParams(location.search);
 const EXPORT = params.has('export');
@@ -22,6 +23,7 @@ declare global {
 let TIMELINE: typeof engine.timeline = [];
 
 async function boot() {
+  document.title = PROJECT.title;
   const onlySet = ONLY ? new Set(ONLY.split(',')) : null;
   await engine.init(onlySet ? (e) => onlySet.has(e.id) : undefined);
   TIMELINE = engine.timeline;
@@ -148,7 +150,7 @@ function setupExport() {
 
 // ------------------------------------------------------------------ preview player
 function setupPlayer() {
-  const audio = new Audio('audio/pdoom.mp3');
+  const audio = new Audio(PROJECT.audio);
   audio.preload = 'auto';
   const ui = document.getElementById('ui')!;
   const scrub = document.getElementById('scrub') as HTMLInputElement;

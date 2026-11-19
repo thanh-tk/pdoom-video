@@ -12,6 +12,24 @@ export const HEX = {
   ember: '#FF8A3D', // hotter, lighter orange for cores/highlights
   blood: '#C21D0B', // deep red-orange for shadows of signal
   acid: '#D8FF3C', // acid: only for the shrooms moment
+  paper: '#FFFFFF',
+  mist: '#F5F7FA',
+  line: '#E4E8EF',
+  slate: '#5F6469',
+  text: '#020919',
+  teal: '#007373',
+  tealWash: '#E0F3F2',
+  green: '#1E763E',
+  greenWash: '#E5F3E8',
+  crimsonWash: '#F9E3E5',
+  crimson: '#D23445',
+  mauve: '#A48A94',
+  blush: '#C7BCBF',
+  sea: '#6CB4B2',
+  deepSea: '#5A9389',
+  amber: '#BF9A10',
+  amberWash: '#F4ECD2',
+  night: '#071417',
 } as const;
 
 export type PaletteKey = keyof typeof HEX;

@@ -12,13 +12,14 @@
   manually verified hard spots.
 """
 import common  # noqa: F401
+import math
 import numpy as np
 import numba
 import torchaudio
 from pron import pron
 
 FRAME = 0.02  # s per emission frame
-N_FRAMES = 7833
+N_FRAMES = math.ceil(common.duration() / FRAME)
 ALPHA = ["-"] + list("abcdefghijklmnopqrstuvwxyz'")
 AIDX = {c: i for i, c in enumerate(ALPHA)}
 

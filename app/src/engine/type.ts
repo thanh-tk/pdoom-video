@@ -22,6 +22,12 @@ for (const wt of [400, 600]) {
 for (const [n, f] of [['300', 'Light'], ['400', 'Regular'], ['500', 'Medium'], ['600', 'SemiBold'], ['700', 'Bold']] as const)
   DEFS.push({ family: `Plex-${n}`, file: `src/IBMPlexMono-${f}.ttf` });
 DEFS.push({ family: 'PlexItalic-400', file: 'src/IBMPlexMono-Italic.ttf' });
+for (const [n, f] of [['400', 'Regular'], ['500', 'Medium'], ['600', 'SemiBold'], ['700', 'Bold'], ['800', 'ExtraBold']] as const)
+  DEFS.push({ family: `Inter-${n}`, file: `Inter-${f}.ttf` });
+for (const [n, f] of [['600', 'SemiBold'], ['700', 'Bold'], ['800', 'ExtraBold']] as const)
+  DEFS.push({ family: `InterDisplay-${n}`, file: `InterDisplay-${f}.ttf` });
+for (const [n, f] of [['400', 'Regular'], ['500', 'Medium'], ['700', 'Bold']] as const)
+  DEFS.push({ family: `JBMono-${n}`, file: `JetBrainsMono-${f}.ttf` });
 
 /** Convenience family names. */
 export const F = {
@@ -40,6 +46,15 @@ export const F = {
   mono(weight = 400, italic = false): string {
     if (italic) return 'PlexItalic-400';
     return `Plex-${nearest([300, 400, 500, 600, 700], weight)}`;
+  },
+  inter(weight = 400): string {
+    return `Inter-${nearest([400, 500, 600, 700, 800], weight)}`;
+  },
+  interDisplay(weight = 700): string {
+    return `InterDisplay-${nearest([600, 700, 800], weight)}`;
+  },
+  code(weight = 400): string {
+    return `JBMono-${nearest([400, 500, 700], weight)}`;
   },
 };
 
