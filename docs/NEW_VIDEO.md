@@ -2,7 +2,7 @@
 
 How to turn a song and its lyrics into a new code-rendered lyric video with this repo, written down after "Onboarded" (Oct 2026) and updated after "Good to Go" (Nov 2026, branch `good-to-go`) so the next one starts from what was learned, not from scratch. Read it with `AGENTS.md` (the rules every scene follows) and `docs/ENGINE.md` (the scene API).
 
-**Model:** `main` is the clean boilerplate (engine, kit, tools, analysis pipeline, templates, these notes); each video gets its own branch started from `main` (the reference run is `good-to-go`). The engine, the analysis pipeline, the slate, the UI kit, the fonts and the tools come from `main`; the song, the data, the treatment, the plates and their assets are per video. For a team run of agents (screenshots, treatment and plates in parallel, critics, success auditor) follow `.devin/skills/video-team/SKILL.md`.
+**Model:** `active` is the clean boilerplate (engine, kit, tools, analysis pipeline, templates, these notes; `main` only mirrors upstream for fork sync); each video gets its own branch started from `active` (the reference run is `good-to-go`). The engine, the analysis pipeline, the slate, the UI kit, the fonts and the tools come from `active`; the song, the data, the treatment, the plates and their assets are per video. For a team run of agents (screenshots, treatment and plates in parallel, critics, success auditor) follow `.devin/skills/video-team/SKILL.md`.
 
 ## 0. Phases and what they cost on this laptop
 
@@ -34,7 +34,7 @@ The lyric sheet is never the final truth: what is sung wins (section 3.2).
 ## 2. Start the branch
 
 ```sh
-git checkout -b <video-id> main   # e.g. payroll-anthem
+git checkout -b <video-id> active # e.g. payroll-anthem
 cd app
 bun scripts/new-video.ts --id <id> --title "<Title>" --artist "<Artist>" \
   --audio "<path to song>" --lyrics "<path to lyrics.txt>" --bpm <approx BPM> --dry-run

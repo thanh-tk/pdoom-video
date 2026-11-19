@@ -1,6 +1,6 @@
 # Code-rendered music video engine (boilerplate)
 
-Engine, UI kit, tools and analysis pipeline for word-synced karaoke lyric videos where every frame is a deterministic function of song time, so the live preview in the browser and the offline 1080p60 (or 4K60) export are identical. `main` is the clean boilerplate: no song, no timing data, no plates, no treatment. Each video lives on its own branch started from `main`; `good-to-go` holds "Good to Go" (guugomeo), the reference run of the agent team.
+Engine, UI kit, tools and analysis pipeline for word-synced karaoke lyric videos where every frame is a deterministic function of song time, so the live preview in the browser and the offline 1080p60 (or 4K60) export are identical. `active` is the clean boilerplate: no song, no timing data, no plates, no treatment (`main` only mirrors upstream for fork sync). Each video lives on its own branch started from `active`; `good-to-go` holds "Good to Go" (guugomeo), the reference run of the agent team.
 
 - **Making a video** (new song, new lyrics, new branch): [`docs/NEW_VIDEO.md`](docs/NEW_VIDEO.md); with a team of agents: [`.devin/skills/video-team/SKILL.md`](.devin/skills/video-team/SKILL.md).
 - Engine and scene API: [`docs/ENGINE.md`](docs/ENGINE.md). Treatment template: [`docs/TREATMENT.md`](docs/TREATMENT.md).
@@ -8,12 +8,12 @@ Engine, UI kit, tools and analysis pipeline for word-synced karaoke lyric videos
 
 ## Layout
 
-- `audio/`, `lyrics/`, `data/` — per video (empty on `main`): the song, the lyric lines as sung (the aligner's input), and the timing data (`data/lyrics.json` word timings, `data/audio.json` beat grid, downbeats, sections, onsets, envelopes).
+- `audio/`, `lyrics/`, `data/` — per video (empty on `active`): the song, the lyric lines as sung (the aligner's input), and the timing data (`data/lyrics.json` word timings, `data/audio.json` beat grid, downbeats, sections, onsets, envelopes).
 - `analysis/` — Python (uv) pipeline that produces the timing data: Demucs stem separation, a mel-roformer lead-vocal stem, CTC forced alignment cross-checked with Whisper, beat / downbeat / onset analysis. One command (`pipeline.py`); per-song tables in `analysis/songs/<song>.py` (`_template.py` documents every field).
 - `app/` — the renderer: TypeScript + three.js, bun + Vite.
   - `src/engine/` — renderer core: timeline playback, adaptive motion blur, post-processing, typography (Inter, Inter Display, JetBrains Mono, Archivo, IBM Plex Mono, Cormorant Garamond, single-stroke fonts), palette, GPU line batches, HUD.
   - `src/scenes/` — `_ui.ts` UI kit (karaoke lyric blocks, cards, badges, screenshot overlays) and `slate.ts` timing-check scene; each video adds its plates here.
-  - `src/timeline.ts` — the edit (only the slate on `main`). `src/project.ts` — title, audio file, output name (written by the scaffold).
+  - `src/timeline.ts` — the edit (only the slate on `active`). `src/project.ts` — title, audio file, output name (written by the scaffold).
   - `public/fonts/` — fonts; per video also `brand/`, `screens/`, `partners/` (internal cut only).
   - `scripts/render.ts` — offline renderer (headless Chrome → raw frames over WebSocket → ffmpeg), stills, contact sheets, QA sweeps, perf.
   - `scripts/new-video.ts` — scaffolds a video on its branch. `scripts/check.ts` — typecheck + text-encoding scan.
@@ -73,7 +73,7 @@ SONG=onboarded uv run python pipeline.py --from align --force
 ## Make a new video
 
 ```sh
-git checkout -b <video-id> main
+git checkout -b <video-id> active
 cd app
 bun scripts/new-video.ts --id <id> --title "<Title>" --artist "<Artist>" --audio <song> --lyrics <lyrics.txt> --bpm <approx> --dry-run
 # read the report, then the same command without --dry-run
